@@ -19,8 +19,9 @@
 | `/run <cmd>` | `claude-<name>` (no extra args) + Enter | - |
 | `/cwd <path>` | `cd <path> && pwd` + Enter (restricted to allowed roots) | - |
 | `/list_recent_workdir` | None (replies with numbered list + /switch_<n>) | - |
+| `/switch <n>` | Switches tmux session by number (persisted to `.current_tmux_session`) | - |
 | `/switch_<n>` | `cd <dir[n]> && pwd` + Enter (from recent list) | - |
-| `/sessions` | None (lists all tmux sessions) | - |
+| `/sessions` | None (lists numbered sessions, current pinned with ✅) | - |
 
 ## Text (no `/` prefix)
 
@@ -36,7 +37,8 @@
 
 ## Additional Notes
 
-- `[session]` argument: space-separated, e.g. `/exit my_session`; omit to use `TMUX_SESSION` from `.env`
+- `[session]` argument: space-separated, e.g. `/exit my_session`; omit to use session from `.current_tmux_session` (fallback order: argument → saved session → `TMUX_SESSION` from `.env`)
+- `.current_tmux_session`: file in bot directory that persists the current tmux session across restarts
 - All commands to tmux automatically end with `C-m` (Enter)
 - Max message length: `MAX_COMMAND_LENGTH` env var (default 5000)
 - User rate limit: `RATE_LIMIT_MS` env var (default 2000ms)

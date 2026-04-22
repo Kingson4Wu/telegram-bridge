@@ -1,0 +1,49 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { CurrentSessionManager } from "../../src/services/currentSession.js";
+
+const TEST_DIR = "/tmp/test_current_session";
+const TEST_FILE = path.join(TEST_DIR, ".current_tmux_session");
+
+describe("CurrentSessionManager", () => {
+  beforeEach(() => {
+    try { fs.rmSync(TEST_DIR, { recursive: true }); } catch {}
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  it("get returns null when file does not exist", async () => {
+    const mgr = new CurrentSessionManager(TEST_DIR);
+    const result = await mgr.get();
+    expect(result).toBeNull();
+  });
+
+  it("set writes session name to file", async () => {
+    const mgr = new CurrentSessionManager(TEST_DIR);
+    await mgr.set("my_session");
+    const content = fs.readFileSync(TEST_FILE, "utf-8");
+    expect(content).toBe("my_session");
+  });
+
+  it("get returns saved session name", async () => {
+    const mgr = new CurrentSessionManager(TEST_DIR);
+    await mgr.set("my_session");
+    const result = await mgr.get();
+    expect(result).toBe("my_session");
+  });
+
+  it("clear removes the file", async () => {
+    const mgr = new CurrentSessionManager(TEST_DIR);
+    await mgr.set("my_session");
+    await mgr.clear();
+    expect(fs.existsSync(TEST_FILE)).toBe(false);
+  });
+
+  it("set updates cache and file", async () => {
+    const mgr = new CurrentSessionManager(TEST_DIR);
+    await mgr.set("session_a");
+    await mgr.set("session_b");
+    const result = await mgr.get();
+    expect(result).toBe("session_b");
+  });
+});

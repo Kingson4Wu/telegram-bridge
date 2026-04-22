@@ -2,6 +2,7 @@ import type { Bot, Middleware } from "grammy";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TmuxBridge } from "../services/tmux.js";
+import { CurrentSessionManager } from "../services/currentSession.js";
 import type { AppConfig, BotCommand } from "../types.js";
 import { validateCommand } from "../security.js";
 
@@ -62,6 +63,22 @@ async function switchToDir(ctx: any, idx: number, deps: HandlerDeps): Promise<vo
   }
 }
 
+export async function switchToSession(ctx: any, idx: number, deps: HandlerDeps): Promise<void> {
+  try {
+    const output = await deps.bridge.listSessions();
+    const sessions = output.split("\n").map(s => s.trim()).filter(Boolean);
+    if (idx < 0 || idx >= sessions.length) {
+      await safeReply(ctx, `Index out of range (1–${sessions.length}).`);
+      return;
+    }
+    const sessionName = sessions[idx];
+    await deps.currentSessionManager.set(sessionName);
+    await safeReply(ctx, `✅ Switched to ${sessionName}`);
+  } catch (err) {
+    await safeReply(ctx, `Failed: ${errMessage(err)}`);
+  }
+}
+
 export const BOT_COMMANDS: BotCommand[] = [
   { command: "help", description: "Show all commands" },
   { command: "startup", description: "Launch Claude" },
@@ -110,6 +127,7 @@ export function stopRateLimitCleanup(): void {
 type HandlerDeps = {
   bridge: TmuxBridge;
   config: AppConfig;
+  currentSessionManager: CurrentSessionManager;
 };
 
 const RAW_KEY_COMMANDS: Record<string, string[]> = {
@@ -132,7 +150,7 @@ const RUN_COMMAND_REGEX = /^\/run(?:@\w+)?\s+(\S+)\s+([\s\S]+)$/;
 // Session name is only recognized if it's a known tmux session (from config).
 // This avoids mis-parsing commands like: /run plugin:telegram@claude-plugins-official --continue
 // where "plugin:telegram" would otherwise be taken as the session name.
-function parseRunCommand(text: string, knownSessions: string[]): { session: string | null; command: string } | null {
+export function parseRunCommand(text: string, knownSessions: string[]): { session: string | null; command: string } | null {
   const match = RUN_COMMAND_REGEX.exec(text);
   if (match) {
     const candidate = match[1]!.trim();
@@ -140,8 +158,8 @@ function parseRunCommand(text: string, knownSessions: string[]): { session: stri
       return { session: candidate, command: match[2]!.trim() };
     }
   }
-  const noPrefix = text.replace(/^\/run(?:@\w+)?\s+/, "").trim();
-  if (!noPrefix) return null;
+  const noPrefix = text.replace(/^\/run(?:@\w+)?\s*/, "").trim();
+  if (!noPrefix || noPrefix === text) return null;
   return { session: null, command: noPrefix };
 }
 
@@ -150,16 +168,23 @@ function getBridge(deps: HandlerDeps, session: string | null): TmuxBridge {
   return new TmuxBridge({ target: { ...deps.config.tmuxTarget, session } });
 }
 
-async function resolveHandlerContext(arg: string | null, deps: HandlerDeps): Promise<{ bridge: TmuxBridge; session: string }> {
-  const session = arg ?? deps.config.tmuxTarget.session;
+export async function resolveHandlerContext(arg: string | null, deps: HandlerDeps): Promise<{ bridge: TmuxBridge; session: string }> {
   const effectiveArg = arg === null || arg === "" ? null : arg;
-  if (effectiveArg !== null && effectiveArg !== deps.config.tmuxTarget.session) {
-    if (!(await deps.bridge.sessionExists(effectiveArg))) {
-      throw new Error(`Session '${effectiveArg}' does not exist`);
-    }
+
+  // Only read saved session from file when no explicit arg provided
+  const savedSession = effectiveArg === null ? await deps.currentSessionManager.get() : null;
+  const session = effectiveArg ?? savedSession ?? deps.config.tmuxTarget.session;
+
+  if (!session) {
+    throw new Error("No session specified. Run /sessions to see available sessions.");
   }
+
+  if (session !== deps.config.tmuxTarget.session && !(await deps.bridge.sessionExists(session))) {
+    throw new Error(`Session '${session}' does not exist`);
+  }
+
   return {
-    bridge: getBridge(deps, effectiveArg),
+    bridge: getBridge(deps, effectiveArg ?? savedSession),
     session,
   };
 }
@@ -238,6 +263,22 @@ export function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+export function formatSessionsList(sessions: string[], current: string | null): string {
+  if (sessions.length === 0) return "No tmux sessions running.";
+
+  const currentIdx = current ? sessions.indexOf(current) : -1;
+  const sorted = current && currentIdx > 0
+    ? [sessions[currentIdx], ...sessions.filter((_, i) => i !== currentIdx)]
+    : sessions;
+
+  const lines = sorted.map((s, i) => {
+    const marker = s === current ? "  ✅" : "   ";
+    return `${i + 1}.${marker} ${s}`;
+  });
+
+  return `📌 Current: ${current ?? "(none)"}\n\n${lines.join("\n")}\n\n/switch_1 ~ /switch_${sessions.length}`;
+}
+
 export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
   startRateLimitCleanup();
 
@@ -256,8 +297,10 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
       "/cwd <path> — cd to path (allowed: " + deps.config.allowedCwdRoots.join(" · ") + ")\n" +
       "/list_recent_workdir — show recent directories with /switch_<n>\n" +
       "/switch_<n> — cd to recent directory by number\n" +
-      "/sessions — list all tmux sessions\n\n" +
-      "session is optional, defaults to configured TMUX_SESSION"
+      "/sessions — list tmux sessions with /switch <n> shortcuts\n" +
+      "/switch <n> — switch tmux session by number\n\n" +
+      "session is optional — defaults to saved session from .current_tmux_session\n" +
+      "run /sessions to see available sessions"
     );
   });
 
@@ -334,13 +377,10 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
   bot.command("sessions", async (ctx) => {
     try {
       const output = await deps.bridge.listSessions();
-      const content = escapeHtml(output);
-      await safeReply(ctx,
-        output
-          ? `🖥️ tmux sessions:\n<pre>${content}</pre>`
-          : "No tmux sessions running.",
-        { parse_mode: "HTML" }
-      );
+      const sessions = output.split("\n").map(s => s.trim()).filter(Boolean);
+      const current = await deps.currentSessionManager.get();
+      const body = formatSessionsList(sessions, current);
+      await safeReply(ctx, `🖥️ tmux sessions:\n\n${body}`);
     } catch (err) {
       await safeReply(ctx, `Failed: ${errMessage(err)}`);
     }
@@ -360,16 +400,16 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
     await safeReply(ctx, `📁 Recent directories:\n\n${msg}`);
   });
 
-  // Handler for /switch N (with space) — registered as bot.command
+  // Handler for /switch N (with space) — switches tmux session
   bot.command("switch", async (ctx) => {
     const raw = (ctx.match as string)?.trim() ?? "";
     const match = raw.match(/^(\d+)$/);
     if (!match) {
-      await safeReply(ctx, "Usage: /switch <n>\ne.g. /switch 1");
+      await safeReply(ctx, "Usage: /switch <n>\ne.g. /switch 1\n\nUse /sessions to see available session numbers.");
       return;
     }
     const idx = parseInt(match[1]!, 10) - 1;
-    await switchToDir(ctx, idx, deps);
+    await switchToSession(ctx, idx, deps);
   });
 
   bot.command("cwd", async (ctx) => {

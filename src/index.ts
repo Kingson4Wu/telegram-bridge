@@ -2,9 +2,11 @@ import { Bot } from "grammy";
 import { loadConfig } from "./config.js";
 import { registerHandlers, buildMiddleware, stopRateLimitCleanup, errMessage, BOT_COMMANDS } from "./bot/handlers.js";
 import { TmuxBridge } from "./services/tmux.js";
+import { CurrentSessionManager } from "./services/currentSession.js";
 
 const config = loadConfig();
 const bridge = new TmuxBridge({ target: config.tmuxTarget });
+const currentSessionManager = new CurrentSessionManager(process.cwd());
 
 // Retry config
 const INITIAL_RETRY_DELAY_MS = 1000;
@@ -118,7 +120,7 @@ bot.catch((err) => {
   console.error("[bot] Unhandled error:", errMessage(err));
 });
 
-registerHandlers(bot, { bridge, config });
+registerHandlers(bot, { bridge, config, currentSessionManager });
 
 // Guard against duplicate signals calling stop() twice
 let stopping = false;
