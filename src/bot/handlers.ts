@@ -1,4 +1,6 @@
 import type { Bot, Middleware } from "grammy";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { TmuxBridge } from "../services/tmux.js";
 import type { AppConfig, BotCommand } from "../types.js";
 import { validateCommand } from "../security.js";
@@ -6,32 +8,58 @@ import { validateCommand } from "../security.js";
 const RATE_LIMIT_CLEANUP_INTERVAL_MS = 60_000;
 const RATE_LIMIT_CLEANUP_THRESHOLD_MS = 20_000;
 const MAX_RECENT_DIRS = 15;
+const RECENT_WORKDIR_FILE = path.join(process.cwd(), "recent_workdir.txt");
+
+function readRecentWorkdirLines(): string[] {
+  try {
+    return fs.readFileSync(RECENT_WORKDIR_FILE, "utf-8").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function isPathAllowed(targetPath: string, allowedRoots: string[]): boolean {
+  return allowedRoots.some((root) => {
+    const rootPath = root.startsWith("~") ? root.replace("~", process.env.HOME ?? "") : root;
+    return targetPath.startsWith(rootPath);
+  });
+}
 
 async function appendRecentWorkdir(newPath: string): Promise<void> {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const filePath = path.join(process.cwd(), "recent_workdir.txt");
+  const lines = readRecentWorkdirLines();
+  const filtered = lines.filter((l) => l !== newPath);
+  filtered.unshift(newPath);
+  if (filtered.length > MAX_RECENT_DIRS) {
+    filtered.length = MAX_RECENT_DIRS;
+  }
+  fs.writeFileSync(RECENT_WORKDIR_FILE, filtered.join("\n") + "\n", "utf-8");
+}
 
-  let lines: string[] = [];
+async function switchToDir(ctx: any, idx: number, deps: HandlerDeps): Promise<void> {
+  const lines = readRecentWorkdirLines();
+  if (lines.length === 0) {
+    await safeReply(ctx, "No recent directories.");
+    return;
+  }
+  if (idx < 0 || idx >= lines.length) {
+    await safeReply(ctx, `Index out of range (1–${lines.length}).`);
+    return;
+  }
+
+  const targetPath = lines[idx];
+  if (!isPathAllowed(targetPath, deps.config.allowedCwdRoots)) {
+    await safeReply(ctx, `Path not allowed: ${targetPath}`);
+    return;
+  }
+
   try {
-    const content = fs.readFileSync(filePath, "utf-8");
-    lines = content.split("\n").filter(Boolean);
-  } catch {
-    // File doesn't exist yet — start fresh
+    await deps.bridge.ensurePaneExists();
+    await deps.bridge.sendCommand(`cd ${targetPath} && pwd`);
+    await appendRecentWorkdir(targetPath);
+    await safeReply(ctx, `✅ cd to ${targetPath}`);
+  } catch (err) {
+    await safeReply(ctx, `Failed: ${errMessage(err)}`);
   }
-
-  // Remove if already exists (will re-add at top to move it to front)
-  lines = lines.filter((l) => l !== newPath);
-
-  // Add to top
-  lines.unshift(newPath);
-
-  // Keep only last 15
-  if (lines.length > MAX_RECENT_DIRS) {
-    lines = lines.slice(0, MAX_RECENT_DIRS);
-  }
-
-  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf-8");
 }
 
 export const BOT_COMMANDS: BotCommand[] = [
@@ -187,6 +215,15 @@ export function buildMiddleware(config: AppConfig): Middleware {
   };
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // Send reply safely, log on failure
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function safeReply(ctx: any, text: string, extra?: object): Promise<void> {
@@ -232,11 +269,12 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
       await bridge.ensurePaneExists();
       const snapshot = await bridge.capturePane();
       const trimmed = snapshot.trim();
+      const content = escapeHtml(trimmed.slice(-3500));
       await safeReply(ctx,
         trimmed
-          ? `📺 ${session}:\n\`\`\`\n${trimmed.slice(-3500)}\n\`\`\``
+          ? `📺 ${session}:\n<pre>${content}</pre>`
           : `📺 ${session}: (empty pane)`,
-        { parse_mode: "Markdown" }
+        { parse_mode: "HTML" }
       );
     } catch (err) {
       await safeReply(ctx, `Peek failed: ${errMessage(err)}`);
@@ -296,11 +334,12 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
   bot.command("sessions", async (ctx) => {
     try {
       const output = await deps.bridge.listSessions();
+      const content = escapeHtml(output);
       await safeReply(ctx,
         output
-          ? `🖥️ tmux sessions:\n\`\`\`\n${output}\n\`\`\``
+          ? `🖥️ tmux sessions:\n<pre>${content}</pre>`
           : "No tmux sessions running.",
-        { parse_mode: "Markdown" }
+        { parse_mode: "HTML" }
       );
     } catch (err) {
       await safeReply(ctx, `Failed: ${errMessage(err)}`);
@@ -308,19 +347,7 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
   });
 
   bot.command("list_recent_workdir", async (ctx) => {
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const filePath = path.join(process.cwd(), "recent_workdir.txt");
-
-    let lines: string[] = [];
-    try {
-      const content = fs.readFileSync(filePath, "utf-8");
-      lines = content.split("\n").filter(Boolean);
-    } catch {
-      await safeReply(ctx, "No recent directories.");
-      return;
-    }
-
+    const lines = readRecentWorkdirLines();
     if (lines.length === 0) {
       await safeReply(ctx, "No recent directories.");
       return;
@@ -342,43 +369,7 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
       return;
     }
     const idx = parseInt(match[1]!, 10) - 1;
-    const fs = await import("node:fs");
-    const pathModule = await import("node:path");
-    const filePath = pathModule.join(process.cwd(), "recent_workdir.txt");
-
-    let lines: string[] = [];
-    try {
-      const content = fs.readFileSync(filePath, "utf-8");
-      lines = content.split("\n").filter(Boolean);
-    } catch {
-      await safeReply(ctx, "No recent directories.");
-      return;
-    }
-
-    if (idx < 0 || idx >= lines.length) {
-      await safeReply(ctx, `Index out of range (1–${lines.length}).`);
-      return;
-    }
-
-    const targetPath = lines[idx];
-    const isAllowed = deps.config.allowedCwdRoots.some((root) => {
-      const rootPath = root.startsWith("~") ? root.replace("~", process.env.HOME ?? "") : root;
-      return targetPath.startsWith(rootPath);
-    });
-
-    if (!isAllowed) {
-      await safeReply(ctx, `Path not allowed: ${targetPath}`);
-      return;
-    }
-
-    try {
-      await deps.bridge.ensurePaneExists();
-      await deps.bridge.sendCommand(`cd ${targetPath} && pwd`);
-      await appendRecentWorkdir(targetPath);
-      await safeReply(ctx, `✅ cd to ${targetPath}`);
-    } catch (err) {
-      await safeReply(ctx, `Failed: ${errMessage(err)}`);
-    }
+    await switchToDir(ctx, idx, deps);
   });
 
   bot.command("cwd", async (ctx) => {
@@ -388,7 +379,6 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
       return;
     }
 
-    // Only one argument — reject extra text
     const parts = raw.split(/\s+/);
     if (parts.length > 1) {
       await safeReply(ctx, "Usage: /cwd <path>\nOnly one path argument allowed.");
@@ -397,8 +387,6 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
 
     const targetPath = raw.startsWith("~") ? raw.replace("~", process.env.HOME ?? "") : raw;
 
-    // Resolve symlinks to get real path
-    const fs = await import("node:fs");
     let realPath: string;
     try {
       realPath = fs.realpathSync(targetPath);
@@ -407,13 +395,7 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
       return;
     }
 
-    // Check if path is under any allowed root
-    const isAllowed = deps.config.allowedCwdRoots.some((root) => {
-      const rootPath = root.startsWith("~") ? root.replace("~", process.env.HOME ?? "") : root;
-      return realPath.startsWith(rootPath);
-    });
-
-    if (!isAllowed) {
+    if (!isPathAllowed(realPath, deps.config.allowedCwdRoots)) {
       await safeReply(ctx, `Path not allowed. Only within: ${deps.config.allowedCwdRoots.join(" · ")}`);
       return;
     }
@@ -441,51 +423,13 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text;
 
-    // Handle /switch_N format (underscore variant not routed by gramY command)
     const switchMatch = text.match(/^\/switch_(\d+)(?:\s|$)/);
     if (switchMatch) {
       const idx = parseInt(switchMatch[1]!, 10) - 1;
-      const fs = await import("node:fs");
-      const pathModule = await import("node:path");
-      const filePath = pathModule.join(process.cwd(), "recent_workdir.txt");
-
-      let lines: string[] = [];
-      try {
-        const content = fs.readFileSync(filePath, "utf-8");
-        lines = content.split("\n").filter(Boolean);
-      } catch {
-        await safeReply(ctx, "No recent directories.");
-        return;
-      }
-
-      if (idx < 0 || idx >= lines.length) {
-        await safeReply(ctx, `Index out of range (1–${lines.length}).`);
-        return;
-      }
-
-      const targetPath = lines[idx];
-      const isAllowed = deps.config.allowedCwdRoots.some((root) => {
-        const rootPath = root.startsWith("~") ? root.replace("~", process.env.HOME ?? "") : root;
-        return targetPath.startsWith(rootPath);
-      });
-
-      if (!isAllowed) {
-        await safeReply(ctx, `Path not allowed: ${targetPath}`);
-        return;
-      }
-
-      try {
-        await deps.bridge.ensurePaneExists();
-        await deps.bridge.sendCommand(`cd ${targetPath} && pwd`);
-        await appendRecentWorkdir(targetPath);
-        await safeReply(ctx, `✅ cd to ${targetPath}`);
-      } catch (err) {
-        await safeReply(ctx, `Failed: ${errMessage(err)}`);
-      }
+      await switchToDir(ctx, idx, deps);
       return;
     }
 
-    // Skip other command-like messages (let bot.command() handlers deal with them)
     if (text.startsWith("/")) return;
 
     const parsed = parseRunCommand(text, [deps.config.tmuxTarget.session]);
