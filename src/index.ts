@@ -59,16 +59,18 @@ const stop = async (signal: string) => {
 process.once("SIGINT", () => void stop("SIGINT"));
 process.once("SIGTERM", () => void stop("SIGTERM"));
 
-// Catch-all: never let uncaught errors crash the process
+// Catch-all: uncaught exceptions are fatal; log and terminate
 process.on("uncaughtException", (err) => {
   console.error(`[fatal] uncaughtException: ${errMessage(err)}`);
+  void stop("uncaughtException").finally(() => {
+    process.exit(1);
+  });
 });
 
 process.on("unhandledRejection", (reason) => {
   console.error(`[fatal] unhandledRejection: ${errMessage(reason)}`);
+  void stop("unhandledRejection");
 });
 
 console.log("[bot] Starting...");
 await bot.start();
-console.log("[bot] Bot stopped gracefully");
-process.exit(0);

@@ -1,2 +1,2 @@
-# rebuild.sh
+# start.sh
 pnpm start

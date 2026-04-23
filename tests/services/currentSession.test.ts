@@ -1,14 +1,21 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { CurrentSessionManager } from "../../src/services/currentSession.js";
 
-const TEST_DIR = "/tmp/test_current_session";
+const TEST_DIR = path.join(os.tmpdir(), "test_current_session");
 const TEST_FILE = path.join(TEST_DIR, ".current_tmux_session");
 
 describe("CurrentSessionManager", () => {
   beforeEach(() => {
-    try { fs.rmSync(TEST_DIR, { recursive: true }); } catch {}
+    try {
+      fs.rmSync(TEST_DIR, { recursive: true });
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT")) {
+        throw error;
+      }
+    }
     fs.mkdirSync(TEST_DIR, { recursive: true });
   });
 
