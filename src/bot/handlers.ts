@@ -66,11 +66,17 @@ async function switchToDir(ctx: any, idx: number, deps: HandlerDeps): Promise<vo
 export async function switchToSession(ctx: any, idx: number, deps: HandlerDeps): Promise<void> {
   try {
     const sessions = await deps.bridge.listSessionNames();
-    if (idx < 0 || idx >= sessions.length) {
-      await safeReply(ctx, `Index out of range (1–${sessions.length}).`);
+    const current = await deps.currentSessionManager.get();
+    const currentIdx = current ? sessions.indexOf(current) : -1;
+    const prepend = current && currentIdx > 0 ? sessions[currentIdx] : null;
+    const rest = prepend ? sessions.filter((_, i) => i !== currentIdx) : sessions;
+    const sorted = prepend ? [prepend, ...rest] : sessions;
+
+    if (idx < 0 || idx >= sorted.length) {
+      await safeReply(ctx, `Index out of range (1–${sorted.length}).`);
       return;
     }
-    const sessionName = sessions[idx]!;
+    const sessionName = sorted[idx]!;
     await deps.currentSessionManager.set(sessionName);
     await safeReply(ctx, `✅ Switched to ${sessionName}`);
   } catch (err) {
