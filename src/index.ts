@@ -3,21 +3,21 @@ import { loadConfig } from "./config.js";
 import { registerHandlers, buildMiddleware, stopRateLimitCleanup, errMessage, BOT_COMMANDS } from "./bot/handlers.js";
 import { TmuxBridge } from "./services/tmux.js";
 import { CurrentSessionManager } from "./services/currentSession.js";
+import { fetch, ProxyAgent } from "undici";
 
 const config = loadConfig();
 const bridge = new TmuxBridge({ target: config.tmuxTarget });
 const currentSessionManager = new CurrentSessionManager(process.cwd());
 
-const { HttpsProxyAgent } = await import("https-proxy-agent");
-
-// Strip signal to avoid AbortSignal conflict between grammY internal signal and undici dispatcher
 const bot = new Bot(config.botToken, {
   client: {
     fetch: config.proxyUrl
       ? (async (url: URL | RequestInfo, init?: RequestInit) => {
           const { signal: _signal, ...rest } = init || {};
-          const agent = new HttpsProxyAgent(config.proxyUrl!);
-          return fetch(url, { ...rest, dispatcher: agent } as RequestInit);
+          const dispatcher = new ProxyAgent(config.proxyUrl!);
+          const requestUrl = typeof url === "string" || url instanceof URL ? url : url.url;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return fetch(requestUrl, { ...rest, dispatcher } as any);
         })
       : undefined,
   },
