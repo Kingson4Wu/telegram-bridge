@@ -84,6 +84,27 @@ export async function switchToSession(ctx: any, idx: number, deps: HandlerDeps):
   }
 }
 
+export async function removeSession(ctx: any, idx: number, deps: HandlerDeps): Promise<void> {
+  try {
+    const sessions = await deps.bridge.listSessionNames();
+    const current = await deps.currentSessionManager.get();
+    const currentIdx = current ? sessions.indexOf(current) : -1;
+    const prepend = current && currentIdx > 0 ? sessions[currentIdx] : null;
+    const rest = prepend ? sessions.filter((_, i) => i !== currentIdx) : sessions;
+    const sorted = prepend ? [prepend, ...rest] : sessions;
+
+    if (idx < 0 || idx >= sorted.length) {
+      await safeReply(ctx, `Index out of range (1–${sorted.length}).`);
+      return;
+    }
+    const sessionName = sorted[idx]!;
+    await deps.bridge.killSession(sessionName);
+    await safeReply(ctx, `✅ Removed session ${sessionName}`);
+  } catch (err) {
+    await safeReply(ctx, `Failed: ${errMessage(err)}`);
+  }
+}
+
 export const BOT_COMMANDS: BotCommand[] = [
   { command: "help", description: "Show all commands" },
   { command: "startup", description: "Launch Claude" },
@@ -101,6 +122,7 @@ export const BOT_COMMANDS: BotCommand[] = [
   { command: "cwd", description: "Change tmux working directory" },
   { command: "list_recent_workdir", description: "List recent working directories" },
   { command: "attach", description: "Switch tmux session by number" },
+  { command: "remove", description: "Remove tmux session by number" },
   { command: "sessions", description: "List tmux sessions" },
 ];
 
@@ -278,7 +300,7 @@ export function formatSessionsList(sessions: string[], current: string | null): 
 
   const lines = sorted.map((s, i) => {
     const marker = s === current ? "  ✅" : "   ";
-    return `${i + 1}.${marker} ${s}\n/attach_${i + 1}`;
+    return `${i + 1}.${marker} ${s}\n/attach_${i + 1}  /remove_${i + 1}`;
   });
 
   return `📌 Current: ${current ?? "(none)"}\n\n${lines.join("\n\n")}`;
@@ -303,7 +325,8 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
       "/list_recent_workdir — show recent directories with /cwd_<n>\n" +
       "/cwd_<n> — cd to recent directory by number\n" +
       "/sessions — list tmux sessions\n" +
-      "/attach <n> — attach to tmux session by number\n\n" +
+      "/attach <n> — attach to tmux session by number\n" +
+      "/remove <n> — remove tmux session by number\n\n" +
       "session is optional — defaults to saved session from .current_tmux_session\n" +
       "run /sessions to see available sessions"
     );
@@ -402,6 +425,18 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
     await switchToSession(ctx, idx, deps);
   });
 
+  // Handler for /remove N — kills tmux session by index
+  bot.command("remove", async (ctx) => {
+    const raw = (ctx.match as string)?.trim() ?? "";
+    const match = raw.match(/^(\d+)$/);
+    if (!match) {
+      await safeReply(ctx, "Usage: /remove <n>\ne.g. /remove 1\n\nUse /sessions to see available session numbers.");
+      return;
+    }
+    const idx = parseInt(match[1]!, 10) - 1;
+    await removeSession(ctx, idx, deps);
+  });
+
   bot.command("list_recent_workdir", async (ctx) => {
     const lines = readRecentWorkdirLines();
     if (lines.length === 0) {
@@ -478,6 +513,13 @@ export function registerHandlers(bot: Bot, deps: HandlerDeps): void {
     if (attachMatch) {
       const idx = parseInt(attachMatch[1]!, 10) - 1;
       await switchToSession(ctx, idx, deps);
+      return;
+    }
+
+    const removeMatch = text.match(/^\/remove_(\d+)(?:\s|$)/);
+    if (removeMatch) {
+      const idx = parseInt(removeMatch[1]!, 10) - 1;
+      await removeSession(ctx, idx, deps);
       return;
     }
 

@@ -62,4 +62,8 @@ export class TmuxBridge {
     const sessions = await this.listSessionNames();
     return sessions.includes(name);
   }
+
+  async killSession(name: string): Promise<void> {
+    await this.execFile("tmux", ["kill-session", "-t", name]);
+  }
 }
