@@ -57,9 +57,9 @@ Auto-restart on crash:
 
 Manage:
 ```bash
-launchctl stop com.kingson4wu.telegram-bridge    # stop
-launchctl start com.kingson4wu.telegram-bridge   # start
-launchctl list com.kingson4wu.telegram-bridge    # status
+launchctl stop com.octopusgarage.telegram-bridge    # stop
+launchctl start com.octopusgarage.telegram-bridge   # start
+launchctl list com.octopusgarage.telegram-bridge    # status
 ```
 
 Logs: `logs/launchd.out.log` and `logs/launchd.err.log`

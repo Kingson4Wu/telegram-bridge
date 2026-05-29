@@ -60,7 +60,7 @@ Before committing, run this to catch hardcoded personal paths:
 
 ```bash
 # Check for hardcoded usernames/paths in source, tests, and docs
-grep -rn "kingsonwu\|kingson4wu\|/Users/[a-z]\+/\|/home/[a-z]\+/" \
+grep -rn "username\|/Users/[a-z]\+/\|/home/[a-z]\+/" \
   --include="*.ts" --include="*.js" --include="*.md" \
   src/ tests/ docs/ || echo "✅ No personal paths found"
 ```

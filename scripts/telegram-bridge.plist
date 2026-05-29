@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.kingson4wu.telegram-bridge</string>
+  <string>com.octopusgarage.telegram-bridge</string>
 
   <key>ProgramArguments</key>
   <array>
