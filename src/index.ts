@@ -73,4 +73,23 @@ process.on("unhandledRejection", (reason) => {
 });
 
 console.log("[bot] Starting...");
+
+// Verify Telegram connectivity with exponential backoff
+const maxRetries = 5;
+for (let i = 0; i < maxRetries; i++) {
+  try {
+    const me = await bot.api.getMe();
+    console.log(`[bot] Connected to Telegram as @${me.username} (bot ID: ${me.id})`);
+    break;
+  } catch (err) {
+    const delayMs = Math.min(1000 * 2 ** i, 30000);
+    console.error(`[bot] Failed to connect (attempt ${i + 1}/${maxRetries}): ${errMessage(err)}. Retrying in ${delayMs}ms...`);
+    if (i === maxRetries - 1) {
+      console.error("[bot] Max retries exceeded, exiting.");
+      process.exit(1);
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+}
+
 await bot.start();
