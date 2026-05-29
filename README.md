@@ -47,6 +47,25 @@ pnpm dev
 
 ## Production
 
+### launchd (recommended)
+
+Auto-restart on crash:
+
+```bash
+./scripts/install-launchd.sh
+```
+
+Manage:
+```bash
+launchctl stop com.kingson4wu.telegram-bridge    # stop
+launchctl start com.kingson4wu.telegram-bridge   # start
+launchctl list com.kingson4wu.telegram-bridge    # status
+```
+
+Logs: `logs/launchd.out.log` and `logs/launchd.err.log`
+
+### Manual
+
 ```bash
 pnpm build
 pnpm start
@@ -81,6 +100,14 @@ Capture and display the current tmux pane content. Uses the default session if n
 
 - `/esc`, `/enter`, `/interrupt`, `/up`, `/down` send tmux key events (not text)
 - `/exit`, `/clear`, `/new`, `/startup`, `/startup_continue` forward text commands as-is
+
+## Resilience
+
+| Mechanism | Behavior |
+|-----------|----------|
+| Network retry | `getMe` retries 5× with exponential backoff (1s→30s) before starting |
+| Process auto-restart | launchd `KeepAlive` restarts bot on crash |
+| Proxy empty string | `.env` empty `HTTP_PROXY=` handled correctly |
 
 ## Testing
 
